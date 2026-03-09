@@ -48,6 +48,8 @@ pub const PATTERNS: &[&str] = &[
     r"^aws\s+",
     // PostgreSQL
     r"^psql(\s|$)",
+    // Salesforce CLI
+    r"^sf\s+(org|data|project|deploy)",
 ];
 
 pub const RULES: &[RtkRule] = &[
@@ -315,6 +317,21 @@ pub const RULES: &[RtkRule] = &[
         category: "Infra",
         savings_pct: 75.0,
         subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    // Salesforce CLI
+    RtkRule {
+        rtk_cmd: "rtk sf",
+        rewrite_prefixes: &["sf"],
+        category: "Salesforce",
+        savings_pct: 80.0,
+        subcmd_savings: &[
+            ("org list", 95.0),
+            ("org display", 80.0),
+            ("data query", 60.0),
+            ("data get", 75.0),
+            ("project deploy", 95.0),
+        ],
         subcmd_status: &[],
     },
 ];
