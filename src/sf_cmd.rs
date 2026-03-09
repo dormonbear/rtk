@@ -183,6 +183,43 @@ fn filter_data_query(json_str: &str) -> Option<String> {
     Some(output)
 }
 
+/// Strip `attributes` from `sf data get record --json` result. Output as compact JSON.
+fn filter_data_get_record(json_str: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json_str).ok()?;
+    let result = v.get("result")?;
+    let mut r = result.clone();
+    if let Some(obj) = r.as_object_mut() {
+        obj.remove("attributes");
+    }
+    Some(r.to_string())
+}
+
+/// Show `ok ✓ <id>` on success, `✗ statusCode: message` on failure for data mutations.
+fn filter_data_mutate(json_str: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json_str).ok()?;
+    let result = v.get("result")?;
+    let success = result["success"].as_bool().unwrap_or(false);
+
+    if success {
+        let id = result["id"].as_str().unwrap_or("?");
+        Some(format!("ok \u{2713} {}", id))
+    } else {
+        let mut errors = Vec::new();
+        if let Some(arr) = result["errors"].as_array() {
+            for err in arr {
+                let code = err["statusCode"].as_str().unwrap_or("?");
+                let msg = err["message"].as_str().unwrap_or("?");
+                errors.push(format!("\u{2717} {}: {}", code, msg));
+            }
+        }
+        if errors.is_empty() {
+            Some("\u{2717} Unknown error".to_string())
+        } else {
+            Some(errors.join("\n"))
+        }
+    }
+}
+
 /// Execute `sf` with args (auto-inject --json), handle errors with filter_sf_error,
 /// passthrough success output for now.
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
@@ -233,6 +270,8 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         ("org", "list") => filter_org_list(&stdout),
         ("org", "display") => filter_org_display(&stdout),
         ("data", "query") => filter_data_query(&stdout),
+        ("data", "get") => filter_data_get_record(&stdout),
+        ("data", "create") | ("data", "update") | ("data", "delete") => filter_data_mutate(&stdout),
         _ => None,
     };
 
@@ -398,5 +437,36 @@ mod tests {
     #[test]
     fn test_filter_data_query_invalid_json() {
         assert!(filter_data_query("not json").is_none());
+    }
+
+    #[test]
+    fn test_filter_data_get_record() {
+        let json = r#"{"status":0,"result":{"attributes":{"type":"Account","url":"/services/data/v66.0/sobjects/Account/001xx1"},"Id":"001xx1","Name":"Acme Corp","Industry":"Technology","CreatedDate":"2024-01-15T10:30:00.000+0000"},"warnings":[]}"#;
+        let result = filter_data_get_record(json).unwrap();
+        assert!(result.contains("Acme Corp"));
+        assert!(result.contains("001xx1"));
+        assert!(!result.contains("attributes"));
+        assert!(!result.contains("/services/data"));
+    }
+
+    #[test]
+    fn test_filter_data_get_record_invalid_json() {
+        assert!(filter_data_get_record("not json").is_none());
+    }
+
+    #[test]
+    fn test_filter_data_mutate_success() {
+        let json = r#"{"status":0,"result":{"id":"001xx000003DGbYAAW","success":true,"errors":[]},"warnings":[]}"#;
+        let result = filter_data_mutate(json).unwrap();
+        assert!(result.contains("ok"));
+        assert!(result.contains("001xx000003DGbYAAW"));
+    }
+
+    #[test]
+    fn test_filter_data_mutate_failure() {
+        let json = r#"{"status":1,"result":{"id":null,"success":false,"errors":[{"statusCode":"REQUIRED_FIELD_MISSING","message":"Required fields are missing: [Name]","fields":["Name"]}]},"warnings":[]}"#;
+        let result = filter_data_mutate(json).unwrap();
+        assert!(result.contains("REQUIRED_FIELD_MISSING"));
+        assert!(result.contains("Required fields are missing"));
     }
 }
