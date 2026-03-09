@@ -139,6 +139,14 @@ fn filter_org_list(json_str: &str) -> Option<String> {
     Some(output.trim_end().to_string())
 }
 
+/// Strip `warnings` array and `status` wrapper from `sf org display --json`.
+/// Output `result` as compact JSON string.
+fn filter_org_display(json_str: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json_str).ok()?;
+    let result = v.get("result")?;
+    Some(result.to_string())
+}
+
 /// Execute `sf` with args (auto-inject --json), handle errors with filter_sf_error,
 /// passthrough success output for now.
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
@@ -187,6 +195,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
 
     let filtered = match (sub1, sub2) {
         ("org", "list") => filter_org_list(&stdout),
+        ("org", "display") => filter_org_display(&stdout),
         _ => None,
     };
 
@@ -295,5 +304,20 @@ mod tests {
     #[test]
     fn test_filter_org_list_invalid_json() {
         assert!(filter_org_list("not json").is_none());
+    }
+
+    #[test]
+    fn test_filter_org_display_strips_warnings() {
+        let json = r#"{"status":0,"result":{"id":"00Dp0000000E0zWEAS","apiVersion":"66.0","accessToken":"00Dp0...token","instanceUrl":"https://english1--stg.sandbox.my.salesforce.com","username":"dormon.zhou@ef.cn.staging","clientId":"PlatformCLI","connectedStatus":"Connected","alias":"OMNI_Staging"},"warnings":["This command will expose sensitive information that allows for subsequent activity using your current authenticated session. Sharing this information is equivalent to logging someone in under the current credential, resulting in unintended access and escalation of privilege. For additional information, please review the authorization section of the developer docs."]}"#;
+        let result = filter_org_display(json).unwrap();
+        assert!(result.contains("OMNI_Staging"));
+        assert!(result.contains("00Dp0000000E0zWEAS"));
+        assert!(!result.contains("sensitive information"));
+        assert!(!result.contains("warnings"));
+    }
+
+    #[test]
+    fn test_filter_org_display_invalid_json() {
+        assert!(filter_org_display("not json").is_none());
     }
 }
