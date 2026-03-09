@@ -220,6 +220,42 @@ fn filter_data_mutate(json_str: &str) -> Option<String> {
     }
 }
 
+/// Extract deploy summary: id, status, components deployed/total/errors.
+/// Show componentFailures details, truncate at MAX_ITEMS errors.
+fn filter_deploy(json_str: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json_str).ok()?;
+    let result = v.get("result")?;
+
+    let id = result["id"].as_str().unwrap_or("?");
+    let status = result["status"].as_str().unwrap_or("?");
+    let deployed = result["numberComponentsDeployed"].as_u64().unwrap_or(0);
+    let total = result["numberComponentsTotal"].as_u64().unwrap_or(0);
+    let errors = result["numberComponentErrors"].as_u64().unwrap_or(0);
+
+    let mut output = format!(
+        "Deploy {} {} {}/{} components ({} errors)",
+        id, status, deployed, total, errors
+    );
+
+    if let Some(failures) = result["componentFailures"].as_array() {
+        for (i, f) in failures.iter().enumerate() {
+            if i >= MAX_ITEMS {
+                output.push_str(&format!(
+                    "\n  ... +{} more errors",
+                    failures.len() - MAX_ITEMS
+                ));
+                break;
+            }
+            let ctype = f["componentType"].as_str().unwrap_or("?");
+            let name = f["fullName"].as_str().unwrap_or("?");
+            let problem = f["problem"].as_str().unwrap_or("?");
+            output.push_str(&format!("\n  {} {}: {}", ctype, name, problem));
+        }
+    }
+
+    Some(output)
+}
+
 /// Execute `sf` with args (auto-inject --json), handle errors with filter_sf_error,
 /// passthrough success output for now.
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
@@ -272,6 +308,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         ("data", "query") => filter_data_query(&stdout),
         ("data", "get") => filter_data_get_record(&stdout),
         ("data", "create") | ("data", "update") | ("data", "delete") => filter_data_mutate(&stdout),
+        ("project", "deploy") => filter_deploy(&stdout),
         _ => None,
     };
 
@@ -468,5 +505,53 @@ mod tests {
         let result = filter_data_mutate(json).unwrap();
         assert!(result.contains("REQUIRED_FIELD_MISSING"));
         assert!(result.contains("Required fields are missing"));
+    }
+
+    #[test]
+    fn test_filter_deploy_in_progress() {
+        let json = r#"{"status":0,"result":{"id":"0Af5g00000abcdefgh","status":"InProgress","numberComponentsDeployed":45,"numberComponentsTotal":120,"numberComponentErrors":0,"componentFailures":[],"checkOnly":false,"createdDate":"2024-01-15T10:30:00.000Z","completedDate":null,"runTestsEnabled":false,"rollbackOnError":true},"warnings":[]}"#;
+        let result = filter_deploy(json).unwrap();
+        assert!(result.contains("0Af5g00000abcdefgh"));
+        assert!(result.contains("InProgress"));
+        assert!(result.contains("45/120"));
+        assert!(result.contains("0 errors"));
+    }
+
+    #[test]
+    fn test_filter_deploy_with_failures() {
+        let json = r#"{"status":0,"result":{"id":"0Af5g00000xyz","status":"Failed","numberComponentsDeployed":118,"numberComponentsTotal":120,"numberComponentErrors":2,"componentFailures":[{"componentType":"ApexClass","fullName":"MyController","problem":"Variable does not exist: foo","lineNumber":42,"columnNumber":10},{"componentType":"LightningComponentBundle","fullName":"myComp","problem":"Unexpected token","lineNumber":1,"columnNumber":1}]},"warnings":[]}"#;
+        let result = filter_deploy(json).unwrap();
+        assert!(result.contains("Failed"));
+        assert!(result.contains("2 errors"));
+        assert!(result.contains("ApexClass"));
+        assert!(result.contains("MyController"));
+        assert!(result.contains("Variable does not exist"));
+    }
+
+    #[test]
+    fn test_filter_deploy_token_savings() {
+        let mut failures = Vec::new();
+        for i in 1..=5 {
+            failures.push(format!(
+                r#"{{"componentType":"ApexClass","fullName":"Controller{}","problem":"Error in line {}","lineNumber":{},"columnNumber":1,"created":false,"deleted":false,"fileName":"classes/Controller{}.cls","success":false}}"#,
+                i, i, i, i
+            ));
+        }
+        let json = format!(
+            r#"{{"status":0,"result":{{"id":"0Af001","status":"Failed","numberComponentsDeployed":95,"numberComponentsTotal":100,"numberComponentErrors":5,"componentFailures":[{}],"checkOnly":false,"createdDate":"2024-01-15T10:30:00.000Z","completedDate":"2024-01-15T10:35:00.000Z","runTestsEnabled":false,"rollbackOnError":true,"startDate":"2024-01-15T10:30:01.000Z","lastModifiedDate":"2024-01-15T10:35:00.000Z","createdBy":"005xx000001234","createdByName":"Admin User"}},"warnings":[]}}"#,
+            failures.join(",")
+        );
+        let result = filter_deploy(&json).unwrap();
+        let savings = 100.0 - (result.len() as f64 / json.len() as f64 * 100.0);
+        assert!(
+            savings >= 60.0,
+            "Deploy filter: expected >=60% savings, got {:.1}%",
+            savings
+        );
+    }
+
+    #[test]
+    fn test_filter_deploy_invalid_json() {
+        assert!(filter_deploy("not json").is_none());
     }
 }
