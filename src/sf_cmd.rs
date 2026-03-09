@@ -147,6 +147,42 @@ fn filter_org_display(json_str: &str) -> Option<String> {
     Some(result.to_string())
 }
 
+/// Parse `sf data query --json` output, strip `attributes` from each record,
+/// show count header with done/partial status, truncate at MAX_QUERY_RECORDS.
+fn filter_data_query(json_str: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json_str).ok()?;
+    let result = v.get("result")?;
+    let total_size = result["totalSize"].as_u64().unwrap_or(0);
+    let done = result["done"].as_bool().unwrap_or(true);
+    let records = result["records"].as_array()?;
+
+    let status = if done { "done" } else { "partial" };
+    let mut output = format!("Query: {} records ({})\n", total_size, status);
+
+    let mut cleaned: Vec<Value> = Vec::new();
+    for (i, record) in records.iter().enumerate() {
+        if i >= MAX_QUERY_RECORDS {
+            break;
+        }
+        let mut r = record.clone();
+        if let Some(obj) = r.as_object_mut() {
+            obj.remove("attributes");
+        }
+        cleaned.push(r);
+    }
+
+    output.push_str(&serde_json::to_string(&cleaned).unwrap_or_default());
+
+    if records.len() > MAX_QUERY_RECORDS {
+        output.push_str(&format!(
+            "\n... +{} more",
+            records.len() - MAX_QUERY_RECORDS
+        ));
+    }
+
+    Some(output)
+}
+
 /// Execute `sf` with args (auto-inject --json), handle errors with filter_sf_error,
 /// passthrough success output for now.
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
@@ -196,6 +232,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let filtered = match (sub1, sub2) {
         ("org", "list") => filter_org_list(&stdout),
         ("org", "display") => filter_org_display(&stdout),
+        ("data", "query") => filter_data_query(&stdout),
         _ => None,
     };
 
@@ -319,5 +356,47 @@ mod tests {
     #[test]
     fn test_filter_org_display_invalid_json() {
         assert!(filter_org_display("not json").is_none());
+    }
+
+    #[test]
+    fn test_filter_data_query_basic() {
+        let json = r#"{"status":0,"result":{"totalSize":3,"done":true,"records":[{"attributes":{"type":"Account","url":"/services/data/v66.0/sobjects/Account/001xx1"},"Id":"001xx1","Name":"Acme Corp","Industry":"Technology"},{"attributes":{"type":"Account","url":"/services/data/v66.0/sobjects/Account/001xx2"},"Id":"001xx2","Name":"Global Inc","Industry":"Finance"},{"attributes":{"type":"Account","url":"/services/data/v66.0/sobjects/Account/001xx3"},"Id":"001xx3","Name":"Local LLC","Industry":"Retail"}]},"warnings":[]}"#;
+        let result = filter_data_query(json).unwrap();
+        assert!(result.contains("3 records"));
+        assert!(result.contains("done"));
+        assert!(result.contains("Acme Corp"));
+        assert!(!result.contains("attributes"));
+        assert!(!result.contains("/services/data"));
+    }
+
+    #[test]
+    fn test_filter_data_query_truncates_at_50() {
+        let mut records = Vec::new();
+        for i in 1..=60 {
+            records.push(format!(
+                r#"{{"attributes":{{"type":"Account","url":"/x"}},"Id":"001{:03}","Name":"Org{}"}}"#,
+                i, i
+            ));
+        }
+        let json = format!(
+            r#"{{"status":0,"result":{{"totalSize":60,"done":true,"records":[{}]}},"warnings":[]}}"#,
+            records.join(",")
+        );
+        let result = filter_data_query(&json).unwrap();
+        assert!(result.contains("60 records"));
+        assert!(result.contains("... +10 more"));
+    }
+
+    #[test]
+    fn test_filter_data_query_not_done() {
+        let json = r#"{"status":0,"result":{"totalSize":2000,"done":false,"nextRecordsUrl":"/services/data/v66.0/query/01gxx-2000","records":[{"attributes":{"type":"Account","url":"/x"},"Id":"001xx1","Name":"Test"}]},"warnings":[]}"#;
+        let result = filter_data_query(json).unwrap();
+        assert!(result.contains("2000 records"));
+        assert!(result.contains("partial"));
+    }
+
+    #[test]
+    fn test_filter_data_query_invalid_json() {
+        assert!(filter_data_query("not json").is_none());
     }
 }
