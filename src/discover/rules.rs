@@ -49,7 +49,7 @@ pub const PATTERNS: &[&str] = &[
     // PostgreSQL
     r"^psql(\s|$)",
     // Salesforce CLI
-    r"^sf\s+(org|data|project|deploy)",
+    r"^sf\s+(org|data|project)",
 ];
 
 pub const RULES: &[RtkRule] = &[
@@ -330,6 +330,9 @@ pub const RULES: &[RtkRule] = &[
             ("org display", 80.0),
             ("data query", 60.0),
             ("data get", 75.0),
+            ("data create", 90.0),
+            ("data update", 90.0),
+            ("data delete", 90.0),
             ("project deploy", 95.0),
         ],
         subcmd_status: &[],

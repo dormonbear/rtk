@@ -8,9 +8,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::process::Command;
 
-#[allow(dead_code)]
 const MAX_ITEMS: usize = 20;
-#[allow(dead_code)]
 const MAX_QUERY_RECORDS: usize = 50;
 
 /// If args don't contain "--json", append it; otherwise return as-is.
@@ -40,15 +38,12 @@ fn filter_sf_error(json_str: &str) -> Option<String> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // Build compact single-line error, stripping verbose details
-    // Format: ✗ commandName code: first_sentence_of_message
-    let short_message = message.split(". ").next().unwrap_or(message);
-
+    // Build compact error, stripping stack/cause/warnings but keeping full message
     match (command_name.is_empty(), code.is_empty()) {
-        (true, true) => Some(format!("✗ {}", short_message)),
-        (true, false) => Some(format!("✗ {}: {}", code, short_message)),
-        (false, true) => Some(format!("✗ [{}] {}", command_name, short_message)),
-        (false, false) => Some(format!("✗ [{}] {}: {}", command_name, code, short_message)),
+        (true, true) => Some(format!("✗ {}", message)),
+        (true, false) => Some(format!("✗ {}: {}", code, message)),
+        (false, true) => Some(format!("✗ [{}] {}", command_name, message)),
+        (false, false) => Some(format!("✗ [{}] {}: {}", command_name, code, message)),
     }
 }
 
@@ -363,8 +358,8 @@ mod tests {
         let result = filter_sf_error(json).unwrap();
         let savings = 100.0 - (count_tokens(&result) as f64 / count_tokens(json) as f64 * 100.0);
         assert!(
-            savings >= 60.0,
-            "Error filter: expected >=60% savings, got {:.1}%",
+            savings >= 40.0,
+            "Error filter: expected >=40% savings, got {:.1}%",
             savings
         );
     }
