@@ -45,6 +45,7 @@ mod read;
 mod rewrite_cmd;
 mod ruff_cmd;
 mod runner;
+mod sf_cmd;
 mod summary;
 mod tee;
 mod telemetry;
@@ -181,6 +182,13 @@ enum Commands {
         /// AWS service subcommand (e.g., sts, s3, ec2, ecs, rds, cloudformation)
         subcommand: String,
         /// Additional arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Salesforce CLI with compact output (auto-injects --json)
+    Sf {
+        /// Arguments passed to sf
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1238,6 +1246,10 @@ fn main() -> Result<()> {
 
         Commands::Aws { subcommand, args } => {
             aws_cmd::run(&subcommand, &args, cli.verbose)?;
+        }
+
+        Commands::Sf { args } => {
+            sf_cmd::run(&args, cli.verbose)?;
         }
 
         Commands::Psql { args } => {
