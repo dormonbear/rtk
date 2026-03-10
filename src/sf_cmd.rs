@@ -28,10 +28,9 @@ fn filter_sf_error(json_str: &str) -> Option<String> {
     let v: Value = serde_json::from_str(json_str).ok()?;
     let obj = v.as_object()?;
 
-    let message = obj
-        .get("message")
-        .and_then(|v| v.as_str())
-        .unwrap_or("Unknown error");
+    // Require `message` field to exist; otherwise return None so callers
+    // can fall back to raw output instead of showing "Unknown error".
+    let message = obj.get("message").and_then(|v| v.as_str())?;
     let code = obj.get("code").and_then(|v| v.as_str()).unwrap_or("");
     let command_name = obj
         .get("commandName")
@@ -233,6 +232,13 @@ fn filter_deploy(json_str: &str) -> Option<String> {
     );
 
     if let Some(failures) = result["componentFailures"].as_array() {
+        if !failures.is_empty() {
+            // Salesforce deploys are all-or-nothing (rollbackOnError defaults to true).
+            // Components shown as "deployed" were NOT actually committed.
+            output.push_str(
+                "\n  NOTE: Deploy is all-or-nothing. No components were deployed due to errors.",
+            );
+        }
         for (i, f) in failures.iter().enumerate() {
             if i >= MAX_ITEMS {
                 output.push_str(&format!(
@@ -255,6 +261,7 @@ fn filter_deploy(json_str: &str) -> Option<String> {
 /// passthrough success output for now.
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
+    let user_had_json = args.iter().any(|a| a == "--json");
     let final_args = ensure_json_flag(args);
 
     let mut cmd = Command::new("sf");
@@ -272,24 +279,40 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let raw = format!("{}\n{}", stdout, stderr);
 
     if !output.status.success() {
-        let filtered = filter_sf_error(&stdout)
-            .or_else(|| filter_sf_error(&stderr))
-            .unwrap_or_else(|| {
-                if stderr.trim().is_empty() {
-                    stdout.trim().to_string()
-                } else {
-                    stderr.trim().to_string()
-                }
-            });
+        // If --json was auto-injected, re-run without it so sf CLI
+        // produces human-readable errors (--json can return "Unknown error").
+        if !user_had_json {
+            let retry = Command::new("sf")
+                .args(args)
+                .output()
+                .context("Failed to re-run sf CLI without --json")?;
+            let out = String::from_utf8_lossy(&retry.stdout);
+            let err = String::from_utf8_lossy(&retry.stderr);
+            let retry_raw = format!("{}\n{}", out, err);
+            let full = retry_raw.trim().to_string();
 
+            timer.track(
+                &format!("sf {}", args.join(" ")),
+                &format!("rtk sf {}", args.join(" ")),
+                &retry_raw,
+                &full,
+            );
+
+            if !full.is_empty() {
+                eprintln!("{}", full);
+            }
+            std::process::exit(retry.status.code().unwrap_or(1));
+        }
+
+        // User explicitly passed --json: passthrough raw JSON error.
+        let full = raw.trim().to_string();
         timer.track(
             &format!("sf {}", args.join(" ")),
             &format!("rtk sf {}", args.join(" ")),
             &raw,
-            &filtered,
+            &full,
         );
-
-        eprintln!("{}", filtered);
+        eprintln!("{}", full);
         std::process::exit(output.status.code().unwrap_or(1));
     }
 
@@ -548,5 +571,18 @@ mod tests {
     #[test]
     fn test_filter_deploy_invalid_json() {
         assert!(filter_deploy("not json").is_none());
+    }
+
+    /// Verify that filter_sf_error returns None when JSON has no `message` field,
+    /// allowing fallback to subcommand-specific filters (e.g. filter_deploy).
+    #[test]
+    fn test_filter_sf_error_no_message_returns_none() {
+        // Deploy failure JSON has `result` but no top-level `message`
+        let json = r#"{"status":1,"result":{"id":"0Af001","status":"Failed","numberComponentsDeployed":0,"numberComponentsTotal":1,"numberComponentErrors":1,"componentFailures":[{"componentType":"Settings","fullName":"Address","problem":"Invalid setting"}]}}"#;
+        assert!(filter_sf_error(json).is_none());
+        // But filter_deploy should extract the useful info
+        let deploy_result = filter_deploy(json).unwrap();
+        assert!(deploy_result.contains("Failed"));
+        assert!(deploy_result.contains("Invalid setting"));
     }
 }
