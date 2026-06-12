@@ -878,6 +878,17 @@ pub const RULES: &[RtkRule] = &[
         subcmd_savings: &[],
         subcmd_status: &[],
     },
+    // Salesforce CLI — only the two filtered subcommands are rewritten;
+    // all other sf invocations (incl. data query) are never touched.
+    RtkRule {
+        pattern: r"^sf\s+(org\s+list|project\s+deploy)\b",
+        rtk_cmd: "rtk sf",
+        rewrite_prefixes: &["sf"],
+        category: "Infra",
+        savings_pct: 60.0,
+        subcmd_savings: &[("org list", 40.0), ("project deploy", 80.0)],
+        subcmd_status: &[],
+    },
 ];
 
 pub const IGNORED_PREFIXES: &[&str] = &[

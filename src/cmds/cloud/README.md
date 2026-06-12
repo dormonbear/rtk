@@ -9,3 +9,4 @@
 - `curl_cmd.rs` truncates long responses, saves full output to file for recovery
 - `wget_cmd.rs` wraps wget with output filtering
 - `psql_cmd.rs` filters PostgreSQL query output
+- `sf_cmd.rs` — Salesforce CLI filter for exactly two subcommands: `org list` (dedupes orgs repeated across result groups, caps the row list with a tee-based recovery hint) and `project deploy` (strips in-progress polling/progress lines, keeps failures verbatim). Explicit `--json` and every other `sf` subcommand pass through untouched
